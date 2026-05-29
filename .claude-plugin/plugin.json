@@ -1,0 +1,11 @@
+{
+  "name": "dev-workflow-skills",
+  "description": "Developer workflow skills for Claude Code",
+  "version": "0.0.1",
+  "author": "DanyloOliinyk",
+  "skills": [
+    { "name": "wt", "path": "skills/wt" },
+    { "name": "git-prism", "path": "skills/git-prism" },
+    { "name": "pr-ninja", "path": "skills/pr-ninja" }
+  ]
+}

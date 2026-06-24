@@ -1,5 +1,7 @@
 # dev-workflow-skills
 
+[![plugin version](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/BavovnaIsTaken/dev-workflow-skills/master/.claude-plugin/plugin.json&query=$.version&label=plugin&color=blue)](.claude-plugin/plugin.json)
+
 A [Claude Code](https://claude.ai/code) plugin with personal developer workflow skills.
 
 ## Install
@@ -21,6 +23,26 @@ claude plugin install dev-workflow-skills@dev-workflow-skills
 ```
 
 Then restart Claude Code (or run `/reload-plugins`) and the `/wt`, `/git-prism`, and `/pr-ninja` commands become available.
+
+## Update
+
+The version badge at the top reflects the latest published plugin version. To pull it, refresh the marketplace first, then update the plugin.
+
+**Inside a running Claude Code session:**
+
+```
+/plugin marketplace update dev-workflow-skills
+/plugin update dev-workflow-skills
+```
+
+**From your terminal:**
+
+```
+claude plugin marketplace update dev-workflow-skills
+claude plugin update dev-workflow-skills
+```
+
+Restart Claude Code (or run `/reload-plugins`) to apply the update.
 
 ## Skills
 

@@ -1,0 +1,13 @@
+{
+  "name": "dev-workflow-skills",
+  "owner": {
+    "name": "Danylo Oliinyk"
+  },
+  "plugins": [
+    {
+      "name": "dev-workflow-skills",
+      "source": ".",
+      "description": "Developer workflow skills for Claude Code"
+    }
+  ]
+}

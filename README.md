@@ -4,9 +4,23 @@ A [Claude Code](https://claude.ai/code) plugin with personal developer workflow 
 
 ## Install
 
+Add this repo as a plugin marketplace, then install the plugin. Pick whichever fits where you are.
+
+**Inside a running Claude Code session** — paste these as slash commands:
+
 ```
-/plugins add https://github.com/BavovnaIsTaken/dev-workflow-skills
+/plugin marketplace add BavovnaIsTaken/dev-workflow-skills
+/plugin install dev-workflow-skills@dev-workflow-skills
 ```
+
+**From your terminal** — when Claude Code isn't running:
+
+```
+claude plugin marketplace add BavovnaIsTaken/dev-workflow-skills
+claude plugin install dev-workflow-skills@dev-workflow-skills
+```
+
+Then restart Claude Code (or run `/reload-plugins`) and the `/wt`, `/git-prism`, and `/pr-ninja` commands become available.
 
 ## Skills
 

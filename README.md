@@ -22,7 +22,7 @@ claude plugin marketplace add BavovnaIsTaken/dev-workflow-skills
 claude plugin install dev-workflow-skills@dev-workflow-skills
 ```
 
-Then restart Claude Code (or run `/reload-plugins`) and the `/wt`, `/git-prism`, and `/pr-ninja` commands become available.
+Then restart Claude Code (or run `/reload-plugins`) and the `/wt`, `/git-prism`, `/pr-ninja`, and `/trello-card` commands become available.
 
 ## Update
 
@@ -51,6 +51,7 @@ Restart Claude Code (or run `/reload-plugins`) to apply the update.
 | **wt** | `/wt [list\|new\|enter\|exit\|remove\|status]` | Manage git worktrees interactively or via subcommands |
 | **git-prism** | `/git-prism` | Split uncommitted changes into logical commits on proper branches, push and open PRs |
 | **pr-ninja** | `/pr-ninja` | PR workflow agent — review, respond to comments, or audit merge-readiness |
+| **trello-card** | `/trello-card <number\|url\|phrase>` | Turn a Trello card into a working brief — description, acceptance criteria, comments, attachments, and where the task lands in the codebase |
 
 ## Usage example
 
@@ -59,4 +60,5 @@ Restart Claude Code (or run `/reload-plugins`) to apply the update.
 /wt list                  # see all active worktrees
 /git-prism                # auto-split staged mess into clean commits
 /pr-ninja                 # review or respond to a PR
+/trello-card 254          # card 254 → task brief with attachments and code map
 ```

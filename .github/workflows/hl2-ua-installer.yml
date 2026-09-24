@@ -36,9 +36,30 @@ jobs:
           "PowerShell $($PSVersionTable.PSVersion) parsed OK"
       - name: Unit, integration and GUI/launcher tests (PowerShell 5.1)
         shell: powershell
+        env:
+          HL2UA_SCREENSHOTS: ${{ runner.temp }}\hl2ua-screenshots
         run: |
           .\tools\hl2-ua\tests\run-tests.ps1 -Gui
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Window screenshots (base64, for reviewing the UI from logs)
+        if: always()
+        shell: powershell
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'hl2ua-screenshots'
+          if (-not (Test-Path $dir)) { 'no screenshots'; exit 0 }
+          Get-ChildItem $dir -Filter *.png | Sort-Object Name | ForEach-Object {
+            "===SHOT $($_.Name)==="
+            $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b64.Length; $i += 4000) { $b64.Substring($i, [Math]::Min(4000, $b64.Length - $i)) }
+            '===END==='
+          }
+      - name: Upload window screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hl2ua-window-screenshots
+          path: ${{ runner.temp }}/hl2ua-screenshots
+          if-no-files-found: ignore
 
   linux-pwsh-7:
     runs-on: ubuntu-latest

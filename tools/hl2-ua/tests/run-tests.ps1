@@ -252,7 +252,10 @@ Test-Case 'Archive name classification' {
         @('Half-Life 2 Episode One - ukr voice.zip', 'ep1', 'full'),
         @('Half-Life 2 UKR (текстури).zip', 'hl2', 'textures'),
         @('Half-Life 2 Lost Coast UKR.zip', 'lostcoast', 'other'),
-        @('Half-Life 2 Епізод Два (озвучення).zip', 'ep2', 'full')
+        @('Half-Life 2 Епізод Два (озвучення).zip', 'ep2', 'full'),
+        @('Half-Life 2 Епізод Перший (озвучення+текст).zip', 'ep1', 'full'),
+        @('Half-Life 2 Епізод другий (текст).zip', 'ep2', 'text'),
+        @('Half-Life 2 Deathmatch Ukr.zip', 'hl2dm', 'other')
     )
     foreach ($c in $cases) {
         $i = Get-UaArchiveInfo $c[0]
@@ -587,6 +590,7 @@ if (-not $SkipIntegration -and $py) {
                 DriveFolderId = 'ROOTFOLDER000001'; EmbedListUrl = $cfg.EmbedListUrl; FolderPageUrl = $cfg.FolderPageUrl
                 DownloadUrl = $cfg.DownloadUrl; ClockCheckUrl = $cfg.ClockCheckUrl; InternetProbes = @($cfg.InternetProbes)
                 ExtraSteamRoots = @($steam); SkipDiskScan = $true; AutoCloseMs = 1500; AutoDialogMs = 800
+                ScreenshotDir = [string]$env:HL2UA_SCREENSHOTS
             }
             Set-DriveConfig @{ hl2 = 'confirm'; ep1 = 'normal'; ep2 = 'normal' }
             Test-Case 'Launcher 1: real .cmd run installs everything' {
@@ -625,10 +629,15 @@ if ($Gui) {
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $orig = $global:HL2UA_ScriptText
     $global:HL2UA_Config.AutoCloseMs = 1500
-    $global:HL2UA_Config.AutoDialogMs = 700
+    $global:HL2UA_Config.AutoDialogMs = 900
+    $global:HL2UA_Config.ScreenshotDir = [string]$env:HL2UA_SCREENSHOTS
+    # Реалістичні кроки — щоб на знімках було видно справжній вигляд вікна.
+    $steps = "Initialize-UaSteps @(@{Key='check';Title='Перевірка компʼютера';Weight=2},@{Key='find';Title='Пошук гри Half-Life 2';Weight=3},@{Key='online';Title='Пошук українізатора в інтернеті';Weight=2},@{Key='job-hl2-full';Title='Half-Life 2: завантаження і встановлення';Weight=50},@{Key='job-ep1-full';Title='Епізод 1: завантаження і встановлення';Weight=20},@{Key='job-ep2-full';Title='Епізод 2: завантаження і встановлення';Weight=15},@{Key='lang';Title='Увімкнення української мови в грі';Weight=5},@{Key='cleanup';Title='Прибирання тимчасових файлів';Weight=3}); foreach (`$k in 'check','find','online') { Enter-UaStep `$k; Complete-UaStep `$k }; "
+    $okFlow = "function Invoke-UaFlow(`$ctx) { $steps Enter-UaStep 'job-hl2-full'; Set-UaProgress 0.45 'Завантаження: 1,1 ГБ з 2,5 ГБ · 8,4 МБ/с · залишилось ≈ 2 хв 50 с'; Start-Sleep -Milliseconds 700; [void](Request-UaChoice -Title 'Гра запущена' -Text ""Гра Half-Life 2 зараз запущена.``nЩоб встановити українізатор, її треба закрити.``n``nЗакрити гру автоматично? Незбережений прогрес від останньої контрольної точки буде втрачено."" -Buttons @('Закрити гру', 'Я закрию сам', 'Скасувати')); Complete-UaStep 'job-hl2-full'; Enter-UaStep 'job-ep1-full'; Complete-UaStep 'job-ep1-full' 'warn'; Enter-UaStep 'job-ep2-full'; Complete-UaStep 'job-ep2-full'; Enter-UaStep 'lang'; Complete-UaStep 'lang'; Enter-UaStep 'cleanup'; Complete-UaStep 'cleanup'; `$ctx.IsSteam = `$true; `$ctx.InstalledFull['ep2'] = `$true; `$ctx.Warnings.Add('«Епізод 1» не встановлено (помилка 35). Решта працює.'); return 'installed' }"
+    $errFlow = "function Invoke-UaFlow(`$ctx) { $steps Enter-UaStep 'job-hl2-full'; Set-UaProgress 0.35 'Перевіряю вміст архіву...'; Start-Sleep -Milliseconds 500; throw (New-UaError -Code 41 -Detail 'test' -Extra 'Диск C: — треба звільнити ще 3,2 ГБ (зараз вільно 1,1 ГБ, потрібно 4,3 ГБ).') }"
     $cases = @(
-        @('success with a prompt', "function Invoke-UaFlow(`$ctx) { Initialize-UaSteps @(@{Key='a';Title='Крок A';Weight=1},@{Key='b';Title='Крок B';Weight=1}); Enter-UaStep 'a'; Set-UaProgress 0.5 'Половина'; Start-Sleep -Milliseconds 300; Complete-UaStep 'a'; Enter-UaStep 'b'; [void](Request-UaChoice -Text 'Тестове питання' -Buttons @('Так','Ні')); Complete-UaStep 'b'; return 'installed' }", 0),
-        @('coded error', "function Invoke-UaFlow(`$ctx) { Initialize-UaSteps @(@{Key='a';Title='Крок A';Weight=1}); Enter-UaStep 'a'; throw (New-UaError 35 'test') }", 35)
+        @('success with a prompt', $okFlow, 0),
+        @('coded error', $errFlow, 41)
     )
     foreach ($c in $cases) {
         Test-Case ('GUI: ' + $c[0]) {

@@ -47,6 +47,7 @@ $global:HL2UA_Config = @{
     SkipDiskScan     = $false
     AutoCloseMs      = 0
     AutoDialogMs     = 0
+    ScreenshotDir    = ''
 }
 
 $global:HL2UA_Errors = @{
@@ -1488,9 +1489,10 @@ function Get-UaArchiveInfo([string]$Path) {
     $ext = [IO.Path]::GetExtension($n)
     $part = 'hl2'
     $lead = '(?<![a-zа-яіїєґ])(епізод|эпизод|episode|ep|еп)[\s._-]*'
-    if ($n -match ($lead + '(2|два|two|ii)(?![0-9a-zа-я])') -or $n -match '(?<![a-z])ep2(?![0-9])') { $part = 'ep2' }
-    elseif ($n -match ($lead + '(1|один|one|i)(?![0-9a-zа-я])') -or $n -match '(?<![a-z])(ep1|episodic)(?![0-9])') { $part = 'ep1' }
+    if ($n -match ($lead + '(2|два|two|ii|друг[а-яіїєґ]*)(?![0-9a-zа-яіїєґ])') -or $n -match '(?<![a-z])ep2(?![0-9])') { $part = 'ep2' }
+    elseif ($n -match ($lead + '(1|один|одна|one|i|перш[а-яіїєґ]*)(?![0-9a-zа-яіїєґ])') -or $n -match '(?<![a-z])(ep1|episodic)(?![0-9])') { $part = 'ep1' }
     elseif ($n -match 'lost\s*coast') { $part = 'lostcoast' }
+    elseif ($n -match 'deathmatch|hl2dm|(?<![a-z])dm(?![a-z])') { $part = 'hl2dm' }
     $type = 'other'
     if ($n -match 'озвуч|дубляж|voice|dub') { $type = 'full' }
     elseif ($n -match 'текст(?!ур)|text(?!ure)|субтитр') { $type = 'text' }
@@ -1510,7 +1512,7 @@ function Compare-UaVersionName([string]$A, [string]$B) {
 
 function Select-UaArchives($Listing, [string[]]$Parts) {
     $sel = @{}
-    foreach ($p in $Parts) { $sel[$p] = @{ Full = $null; Text = $null; Other = $null; Unsupported = $null } }
+    foreach ($p in $Parts) { $sel[$p] = @{ Full = $null; Text = $null; Other = $null; OtherCount = 0; Unsupported = $null } }
     foreach ($e in @($Listing)) {
         if (-not $e -or $e.IsFolder) { continue }
         $info = Get-UaArchiveInfo $e.Path
@@ -1526,11 +1528,12 @@ function Select-UaArchives($Listing, [string[]]$Parts) {
         elseif ($info.Type -eq 'text') { $key = 'Text' }
         elseif ($info.Type -eq 'other') { $key = 'Other' }
         if (-not $key) { continue }
+        if ($key -eq 'Other') { $slot.OtherCount = [int]$slot.OtherCount + 1 }
         if (-not $slot[$key] -or (Compare-UaVersionName $e.Name $slot[$key].Name) -gt 0) { $slot[$key] = $e }
     }
     foreach ($p in $Parts) {
         $slot = $sel[$p]
-        if (-not $slot.Full -and $slot.Other) {
+        if (-not $slot.Full -and $slot.Other -and [int]$slot.OtherCount -eq 1) {
             Write-UaLog ('No explicit voice archive for {0}; using "{1}"' -f $p, $slot.Other.Path) 'WARN'
             $slot.Full = $slot.Other
         }
@@ -2739,7 +2742,7 @@ function Show-UaDialog {
         }
     }
     $dlg.ClientSize = New-Object System.Drawing.Size((24 + $w + 24), ($y + 40 + 22))
-    $dlg.Add_Shown({ $this.Activate() })
+    $dlg.Add_Shown({ $this.Activate(); Save-UaScreenshot $this 'dialog' })
     if ($global:HL2UA_Config.AutoDialogMs -gt 0) {
         # Лише для автотестів: «натискаємо» першу кнопку.
         $t = New-Object System.Windows.Forms.Timer
@@ -2753,6 +2756,22 @@ function Show-UaDialog {
     $res = [int]$dlg.Tag
     $dlg.Dispose()
     return $res
+}
+
+# Лише для CI: знімки вікон, щоб перевірити вигляд без живої людини.
+function Save-UaScreenshot($Form, [string]$Name) {
+    $dir = [string]$global:HL2UA_Config.ScreenshotDir
+    if (-not $dir -or -not $Form) { return }
+    try {
+        [void][IO.Directory]::CreateDirectory($dir)
+        $global:HL2UA_ShotSeq = [int]$global:HL2UA_ShotSeq + 1
+        $Form.Refresh()
+        $bmp = New-Object System.Drawing.Bitmap($Form.Width, $Form.Height)
+        $Form.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle(0, 0, $Form.Width, $Form.Height)))
+        $file = Join-UaPath $dir ('{0}-{1:D2}-{2}.png' -f [Diagnostics.Process]::GetCurrentProcess().Id, $global:HL2UA_ShotSeq, $Name)
+        $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+    } catch { }
 }
 
 # Службове чорне вікно згортаємо, щойно зʼявилося наше (щоб його випадково не закрили).
@@ -2917,6 +2936,7 @@ function Show-UaResult {
     $ui.ResultPanel.Visible = $true
     $ui.ResultPanel.BringToFront()
     try { $ui.Form.Activate() } catch { }
+    Save-UaScreenshot $ui.Form ('result-' + $r.Kind + $(if ($r.Kind -eq 'error') { '-' + $r.Code } else { '' }))
     if ($global:HL2UA_Config.AutoCloseMs -gt 0) {
         $t = New-Object System.Windows.Forms.Timer
         $t.Interval = [int]$global:HL2UA_Config.AutoCloseMs
@@ -2933,6 +2953,10 @@ function Invoke-UaUiTick {
         if ($s.Version -ne $ui.LastVersion -and -not $ui.Finished) {
             $ui.LastVersion = $s.Version
             Update-UaUi
+            if ($global:HL2UA_Config.ScreenshotDir -and $s.CurrentKey -and $s.StepFraction -ge 0.3 -and $ui.LastShotKey -ne $s.CurrentKey) {
+                $ui.LastShotKey = $s.CurrentKey
+                Save-UaScreenshot $ui.Form ('progress-' + $s.CurrentKey)
+            }
         }
         $p = $s.Prompt
         if ($p -and $p.Id -ne $ui.LastPromptId) {
@@ -2997,7 +3021,7 @@ function Start-UaGame {
 }
 
 function Show-UaMainWindow {
-    $ui = @{ LastVersion = -1; LastPromptId = 0; Finished = $false; WorkerPS = $null; WorkerRS = $null; WorkerHandle = $null }
+    $ui = @{ LastVersion = -1; LastPromptId = 0; Finished = $false; WorkerPS = $null; WorkerRS = $null; WorkerHandle = $null; LastShotKey = $null }
     $global:HL2UA_Ui = $ui
     $global:HL2UA_InPrompt = $false
     $blue = [System.Drawing.Color]::FromArgb(0, 87, 183)

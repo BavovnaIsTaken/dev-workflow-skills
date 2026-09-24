@@ -612,6 +612,48 @@ if (-not $SkipIntegration -and $py) {
                 $code = Invoke-Launcher $ov
                 Assert-Eq $code 21 'exit code'
             }
+
+            Test-Case 'Integration 9: non-Steam copy found via desktop shortcut, language set on the shortcut' {
+                Assert-Eq (Invoke-Flow @(1)).Result.Kind 'uninstalled' 'start clean'
+                $cfg.ExtraSteamRoots = @()
+                $shell = New-Object -ComObject WScript.Shell
+                $lnk = P ([Environment]::GetFolderPath('Desktop')) 'HL2 test shortcut.lnk'
+                $sc = $shell.CreateShortcut($lnk)
+                $sc.TargetPath = (P $game 'hl2.exe')
+                $sc.Arguments = '-console'
+                $sc.Save()
+                try {
+                    $s = Invoke-Flow @()
+                    Assert-Eq $s.Result.Kind 'installed' 'result'
+                    Assert-True (-not $s.Result.IsSteam) 'detected as non-Steam'
+                    Assert-True ([IO.File]::Exists($wav)) 'files installed'
+                    Assert-Eq $shell.CreateShortcut($lnk).Arguments '-console -language ukr +cc_lang ukr' 'shortcut arguments'
+                    $u = Invoke-Flow @(1)
+                    Assert-Eq $u.Result.Kind 'uninstalled' 'uninstall'
+                    Assert-Eq $shell.CreateShortcut($lnk).Arguments '-console' 'shortcut restored'
+                } finally {
+                    Remove-Item -LiteralPath $lnk -ErrorAction SilentlyContinue
+                    $cfg.ExtraSteamRoots = @($steam)
+                }
+            }
+
+            Test-Case 'Elevation handoff file round-trip' {
+                $hp = Get-UaHandoffPath
+                [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($hp))
+                $oldArg = $env:HL2UA_ARG
+                try {
+                    $env:HL2UA_ARG = '--elevated'
+                    [IO.File]::WriteAllText($hp, (@{ GameDir = $game; Desktop = $desktop; LogPath = 'x.log'; CreatedTicks = [DateTime]::UtcNow.Ticks } | ConvertTo-Json))
+                    Assert-Eq ([string](Get-UaProp (Read-UaHandoff) 'GameDir')) $game 'fresh handoff is read'
+                    [IO.File]::WriteAllText($hp, (@{ GameDir = $game; CreatedTicks = [DateTime]::UtcNow.AddHours(-2).Ticks } | ConvertTo-Json))
+                    Assert-True ($null -eq (Read-UaHandoff)) 'stale handoff ignored'
+                    $env:HL2UA_ARG = $null
+                    Assert-True ($null -eq (Read-UaHandoff)) 'ignored without --elevated'
+                } finally {
+                    $env:HL2UA_ARG = $oldArg
+                    Remove-UaHandoff
+                }
+            }
         }
     } finally {
         try { $server.Kill() } catch { }

@@ -2771,6 +2771,7 @@ function Save-UaScreenshot($Form, [string]$Name) {
         $file = Join-UaPath $dir ('{0}-{1:D2}-{2}.png' -f [Diagnostics.Process]::GetCurrentProcess().Id, $global:HL2UA_ShotSeq, $Name)
         $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
         $bmp.Dispose()
+        if ($global:HL2UA_OnScreenshot) { & $global:HL2UA_OnScreenshot $Form $file }
     } catch { }
 }
 

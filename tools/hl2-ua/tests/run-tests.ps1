@@ -639,6 +639,40 @@ if ($Gui) {
         @('success with a prompt', $okFlow, 0),
         @('coded error', $errFlow, 41)
     )
+    # Аудит макета: чи влазить текст у кожен видимий елемент і чи не вилазять елементи за межі батька.
+    $script:LayoutIssues = New-Object System.Collections.Generic.List[string]
+    $global:HL2UA_OnScreenshot = {
+        param($Form, $File)
+        $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::TextBoxControl
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add(('{0}: form {1}x{2}, client {3}x{4}' -f [IO.Path]::GetFileName($File), $Form.Width, $Form.Height, $Form.ClientSize.Width, $Form.ClientSize.Height))
+        $stack = New-Object System.Collections.Stack
+        foreach ($c in $Form.Controls) { $stack.Push(@($c, 1)) }
+        while ($stack.Count -gt 0) {
+            $pair = $stack.Pop()
+            $c = $pair[0]
+            if (-not $c.Visible) { continue }
+            $txt = [string]$c.Text
+            $issue = ''
+            if ($txt -and -not ($c -is [System.Windows.Forms.TextBox]) -and -not ($c -is [System.Windows.Forms.ProgressBar])) {
+                $need = [System.Windows.Forms.TextRenderer]::MeasureText($txt, $c.Font, (New-Object System.Drawing.Size($c.ClientSize.Width, 0)), $flags)
+                $one = [System.Windows.Forms.TextRenderer]::MeasureText($txt, $c.Font)
+                if ($c -is [System.Windows.Forms.Button]) { if ($one.Width -gt $c.ClientSize.Width - 6) { $issue += ' BUTTON-TEXT-TOO-WIDE' } }
+                elseif ($c -is [System.Windows.Forms.Label] -and $c.AutoEllipsis) { if ($one.Width -gt $c.ClientSize.Width) { $issue += ' ELLIPSIZED' } }
+                elseif ($need.Height -gt $c.ClientSize.Height + 2) { $issue += (' TEXT-CLIPPED(needs h={0})' -f $need.Height) }
+            }
+            if ($c -is [System.Windows.Forms.TextBox] -and $txt) {
+                $need = [System.Windows.Forms.TextRenderer]::MeasureText($txt, $c.Font, (New-Object System.Drawing.Size(($c.ClientSize.Width - 20), 0)), $flags)
+                if ($need.Height -gt $c.ClientSize.Height) { $issue += ' (scrolls)' }
+            }
+            $par = $c.Parent
+            if ($par -and ($c.Left -lt 0 -or $c.Top -lt 0 -or $c.Right -gt $par.ClientSize.Width -or $c.Bottom -gt $par.ClientSize.Height)) { $issue += ' OUTSIDE-PARENT' }
+            $lines.Add(('{0}{1} [{2},{3} {4}x{5}] "{6}"{7}' -f ('  ' * [int]$pair[1]), $c.GetType().Name, $c.Left, $c.Top, $c.Width, $c.Height, ($txt -replace "`r?`n", ' / '), $issue))
+            if ($issue -match 'TOO-WIDE|CLIPPED|OUTSIDE') { $script:LayoutIssues.Add(([IO.Path]::GetFileName($File) + ': ' + $lines[$lines.Count - 1].Trim())) }
+            foreach ($ch in $c.Controls) { $stack.Push(@($ch, ([int]$pair[1] + 1))) }
+        }
+        foreach ($l in $lines) { Write-Host ('    | ' + $l) }
+    }
     foreach ($c in $cases) {
         Test-Case ('GUI: ' + $c[0]) {
             $global:HL2UA_ScriptText = $orig + "`n" + $c[1] + "`n"
@@ -652,6 +686,13 @@ if ($Gui) {
         }
     }
     $global:HL2UA_ScriptText = $orig
+    $global:HL2UA_OnScreenshot = $null
+    if ($global:HL2UA_Config.ScreenshotDir) {
+        Test-Case 'GUI layout: no clipped text, nothing outside its parent' {
+            foreach ($i in $script:LayoutIssues) { Add-Failure ('layout: ' + $i) }
+            Assert-True ($script:LayoutIssues.Count -eq 0) 'layout audit'
+        }
+    }
 }
 
 Write-Host ''

@@ -62,3 +62,9 @@ Restart Claude Code (or run `/reload-plugins`) to apply the update.
 /pr-ninja                 # review or respond to a PR
 /trello-card 254          # card 254 → task brief with attachments and code map
 ```
+
+## Other tools
+
+| Tool | Description |
+|------|-------------|
+| [**hl2-ua**](tools/hl2-ua/README.md) | One-file Windows installer for the HamUA Studio Ukrainian localization of Half-Life 2 — finds the game, downloads, installs, enables the language in Steam, cleans up (docs in Ukrainian) |

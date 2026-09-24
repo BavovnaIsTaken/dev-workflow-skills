@@ -1,0 +1,52 @@
+name: hl2-ua-installer
+
+on:
+  push:
+    paths:
+      - 'tools/hl2-ua/**'
+      - '.github/workflows/hl2-ua-installer.yml'
+  pull_request:
+    paths:
+      - 'tools/hl2-ua/**'
+  workflow_dispatch:
+
+jobs:
+  windows-powershell-5:
+    # Та сама PowerShell 5.1 і .NET Framework, що й на Windows 10 у батька.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Launcher must keep CRLF line endings
+        shell: powershell
+        run: |
+          $bytes = [IO.File]::ReadAllBytes('tools\hl2-ua\HL2-UA-Installer.cmd')
+          $lf = 0; $crlf = 0
+          for ($i = 0; $i -lt $bytes.Length; $i++) { if ($bytes[$i] -eq 10) { if ($i -gt 0 -and $bytes[$i - 1] -eq 13) { $crlf++ } else { $lf++ } } }
+          "CRLF: $crlf, bare LF: $lf"
+          if ($lf -ne 0 -or $bytes[0] -eq 0xEF) { throw 'HL2-UA-Installer.cmd must be CRLF without BOM' }
+      - name: Parse with the Windows PowerShell 5.1 parser
+        shell: powershell
+        run: |
+          $text = [IO.File]::ReadAllText("$pwd\tools\hl2-ua\HL2-UA-Installer.cmd", [Text.Encoding]::UTF8)
+          $tokens = $null; $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors)
+          $errors | ForEach-Object { "L$($_.Extent.StartLineNumber): $($_.Message)" }
+          if ($errors.Count) { throw "$($errors.Count) parse errors" }
+          "PowerShell $($PSVersionTable.PSVersion) parsed OK"
+      - name: Unit, integration and GUI/launcher tests (PowerShell 5.1)
+        shell: powershell
+        run: |
+          .\tools\hl2-ua\tests\run-tests.ps1 -Gui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  linux-pwsh-7:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit and integration tests (PowerShell 7)
+        shell: pwsh
+        run: |
+          ./tools/hl2-ua/tests/run-tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

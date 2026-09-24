@@ -533,7 +533,7 @@ function Get-UaVdfValue($Node, [string]$Key) {
 # Змінює LaunchOptions гри AppId у тексті localconfig.vdf. $Transform отримує
 # старе значення і повертає нове. Решта файлу лишається байт-у-байт.
 function Set-UaVdfAppLaunchOptions {
-    param([string]$Text, [string]$AppId, [scriptblock]$Transform, [switch]$CreateIfMissing, [switch]$RemoveIfEmpty)
+    param([string]$Text, [string]$AppId, [scriptblock]$Transform, $TransformArg = $null, [switch]$CreateIfMissing, [switch]$RemoveIfEmpty)
     $root = ConvertFrom-UaVdf $Text
     $store = Get-UaVdfChild $root 'UserLocalConfigStore'
     if (-not $store -or -not $store.IsBlock) { throw 'localconfig.vdf: UserLocalConfigStore not found' }
@@ -550,7 +550,7 @@ function Set-UaVdfAppLaunchOptions {
     }
     if ($i -lt $path.Count) {
         if (-not $CreateIfMissing) { return @{ Text = $Text; Changed = $false; Before = $null; After = $null } }
-        $new = [string](& $Transform '')
+        $new = [string](& $Transform '' $TransformArg)
         if (-not $new) { return @{ Text = $Text; Changed = $false; Before = ''; After = '' } }
         $d = $node.Depth + 1
         $sb = New-Object System.Text.StringBuilder
@@ -569,7 +569,7 @@ function Set-UaVdfAppLaunchOptions {
     $lo = Get-UaVdfChild $node 'LaunchOptions'
     if ($lo -and -not $lo.IsBlock) {
         $old = [string]$lo.Value
-        $new = [string](& $Transform $old)
+        $new = [string](& $Transform $old $TransformArg)
         if ($new -ceq $old) { return @{ Text = $Text; Changed = $false; Before = $old; After = $old } }
         if ($new -eq '' -and $RemoveIfEmpty) {
             # Прибираємо рядок цілком — так само, як ми його колись вставили.
@@ -580,7 +580,7 @@ function Set-UaVdfAppLaunchOptions {
         $out = $Text.Substring(0, $lo.ValueStart) + '"' + (ConvertTo-UaVdfEscaped $new) + '"' + $Text.Substring($lo.ValueEnd)
         return @{ Text = $out; Changed = $true; Before = $old; After = $new }
     }
-    $new = [string](& $Transform '')
+    $new = [string](& $Transform '' $TransformArg)
     if (-not $new) { return @{ Text = $Text; Changed = $false; Before = ''; After = '' } }
     $ind = "`t" * ($node.Depth + 1)
     $ins = $nl + $ind + '"LaunchOptions"' + "`t`t" + '"' + (ConvertTo-UaVdfEscaped $new) + '"'
@@ -1516,8 +1516,8 @@ function Select-UaArchives($Listing, [string[]]$Parts) {
         $info = Get-UaArchiveInfo $e.Path
         if (-not $sel.ContainsKey($info.Part)) { continue }
         $slot = $sel[$info.Part]
-        if ($info.Ext -notin '.zip', '.7z', '.rar') { continue }
-        if ($info.Ext -ne '.zip') {
+        if ($info.Ext -notin '.zip', '.7z', '.rar', '') { continue }
+        if ($info.Ext -in '.7z', '.rar') {
             if ($info.Type -in 'full', 'other') { $slot.Unsupported = $e }
             continue
         }
@@ -1812,6 +1812,12 @@ function Invoke-UaExtract($ctx, $Job, $Plan, [bool]$DoBackup) {
     }
     Set-UaJobProgress $Job 'install' 1.0 ('Встановлено файлів: {0}' -f $count)
     Write-UaLog ('Installed {0} files ({1} new, {2} replaced)' -f $count, $txn.New.Count, $txn.Replaced.Count)
+    # Архів HL2 може містити й епізоди — тоді окремих архівів для них не треба.
+    foreach ($it in $Plan.Items) {
+        $top = ([string]$it.Rel).Split('/')[0].ToLowerInvariant()
+        if ($top.StartsWith('episodic')) { $ctx.Covered['ep1'] = $true }
+        elseif ($top.StartsWith('ep2')) { $ctx.Covered['ep2'] = $true }
+    }
 }
 
 # ============================================== launch options / shortcuts ====
@@ -1841,19 +1847,19 @@ function Get-UaLaunchOptionsEdit([string]$File, [string]$Text, [string]$Mode, $R
     $changes = New-Object System.Collections.Generic.List[object]
     $apps = @($global:HL2UA_Config.SteamAppId) + @($global:HL2UA_Config.ExtraSteamAppIds)
     foreach ($appId in $apps) {
+        $rec = $null
         if ($Mode -eq 'add') {
             $transform = { param($old) Add-UaLaunchArgs $old }
         } else {
-            $rec = $null
             foreach ($rr in @($Records)) { if ($rr -and (Get-UaProp $rr 'File') -ieq $File -and [string](Get-UaProp $rr 'AppId') -eq $appId) { $rec = $rr } }
             $transform = {
-                param($old)
-                if ($rec -and $old -ceq [string](Get-UaProp $rec 'After')) { return [string](Get-UaProp $rec 'Before') }
+                param($old, $r)
+                if ($r -and $old -ceq [string](Get-UaProp $r 'After')) { return [string](Get-UaProp $r 'Before') }
                 return Remove-UaLaunchArgs $old
-            }.GetNewClosure()
+            }
         }
         $create = ($Mode -eq 'add' -and $appId -eq $global:HL2UA_Config.SteamAppId)
-        $res = Set-UaVdfAppLaunchOptions -Text $newText -AppId $appId -Transform $transform -CreateIfMissing:$create -RemoveIfEmpty:($Mode -eq 'remove')
+        $res = Set-UaVdfAppLaunchOptions -Text $newText -AppId $appId -Transform $transform -TransformArg $rec -CreateIfMissing:$create -RemoveIfEmpty:($Mode -eq 'remove')
         if ($res.Changed) {
             $newText = $res.Text
             $changes.Add(@{ File = $File; AppId = $appId; Before = $res.Before; After = $res.After })
@@ -1958,7 +1964,7 @@ function Restore-UaShortcuts($Records) {
 function Invoke-UaWorkshopSubscribe($ctx) {
     $cfg = $global:HL2UA_Config
     foreach ($part in @($ctx.Parts)) {
-        if ($ctx.InstalledFull.ContainsKey($part)) { continue }
+        if ($ctx.InstalledFull.ContainsKey($part) -or $ctx.Covered.ContainsKey($part)) { continue }
         $id = $cfg.WorkshopItems[$part]
         if (-not $id) { continue }
         $name = Get-UaPartName $part
@@ -2147,6 +2153,8 @@ function New-UaContext {
         PreviousManifest = $null
         ManualFiles      = (New-Object System.Collections.Generic.List[string])
         Handoff          = $null
+        Covered          = @{}
+        MissingParts     = (New-Object System.Collections.Generic.List[string])
     }
 }
 
@@ -2213,8 +2221,8 @@ function Get-UaJobs($ctx) {
             if ($slot.Full) { $jobs += New-UaJob $part 'full' $slot.Full $true }
             elseif ($slot.Text -and $ctx.IsSteam) { $jobs += New-UaJob $part 'text' $slot.Text $true }
             else {
-                Write-UaLog ('No archive for ' + $part) 'WARN'
-                $ctx.Warnings.Add(('Для «{0}» українізатор на Google Drive не знайдено — цю частину пропущено.' -f (Get-UaPartName $part)))
+                Write-UaLog ('No separate archive for ' + $part) 'WARN'
+                $ctx.MissingParts.Add($part)
             }
         }
     }
@@ -2573,6 +2581,11 @@ function Invoke-UaFlow($ctx) {
         }
     }
 
+    foreach ($part in $ctx.MissingParts) {
+        if ($ctx.Covered.ContainsKey($part)) { Write-UaLog ($part + ' was covered by another archive'); continue }
+        $ctx.Warnings.Add(('Для «{0}» українізатор на Google Drive не знайдено — цю частину пропущено.' -f (Get-UaPartName $part)))
+    }
+
     Enter-UaStep 'lang'
     if ($ctx.IsSteam) { Update-UaSteamLaunchOptions $ctx 'add' $null }
     else { Set-UaShortcutLanguage $ctx }
@@ -2627,7 +2640,7 @@ function Invoke-UaWorkerMain {
         if ($ctx.GameDir) { $exe = Get-UaGameExe $ctx.GameDir }
         $s.Result = @{
             Kind = $kind; Warnings = @($ctx.Warnings); Strategy = $ctx.Strategy; IsSteam = $ctx.IsSteam
-            GameDir = $ctx.GameDir; Exe = $exe; Parts = @($ctx.Parts); InstalledFull = @($ctx.InstalledFull.Keys)
+            GameDir = $ctx.GameDir; Exe = $exe; Parts = @($ctx.Parts); InstalledFull = @(@($ctx.InstalledFull.Keys) + @($ctx.Covered.Keys) | Select-Object -Unique)
         }
         Write-UaLog ('RESULT: ' + $kind)
     } catch {
@@ -3004,7 +3017,7 @@ function Show-UaMainWindow {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'Українізатор Half-Life 2'
-    $form.ClientSize = New-Object System.Drawing.Size(720, 600)
+    $form.ClientSize = New-Object System.Drawing.Size(720, 536)
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedSingle'
     $form.MaximizeBox = $false
@@ -3013,28 +3026,28 @@ function Show-UaMainWindow {
     $ui.Form = $form
 
     $header = New-Object System.Windows.Forms.Panel
-    $header.SetBounds(0, 0, 720, 84)
+    $header.SetBounds(0, 0, 720, 72)
     $header.BackColor = $blue
     $form.Controls.Add($header)
-    $title = New-UaLabel 'Українізатор Half-Life 2' (New-UaFont 20 'Bold') ([System.Drawing.Color]::White) 20 8 680 42
+    $title = New-UaLabel 'Українізатор Half-Life 2' (New-UaFont 18 'Bold') ([System.Drawing.Color]::White) 20 6 680 36
     $title.BackColor = $blue
     $header.Controls.Add($title)
-    $sub = New-UaLabel 'Українське озвучення і переклад від HamUA Studio' (New-UaFont 10.5) $yellow 23 52 680 24
+    $sub = New-UaLabel 'Українське озвучення і переклад від HamUA Studio' (New-UaFont 10.5) $yellow 23 42 680 24
     $sub.BackColor = $blue
     $header.Controls.Add($sub)
     $stripe = New-Object System.Windows.Forms.Panel
-    $stripe.SetBounds(0, 84, 720, 6)
+    $stripe.SetBounds(0, 72, 720, 5)
     $stripe.BackColor = $yellow
     $form.Controls.Add($stripe)
 
     $ui.Icons = @()
     $ui.Labels = @()
-    for ($i = 0; $i -lt 9; $i++) {
-        $y = 104 + $i * 33
-        $ic = New-UaLabel '' (New-UaFont 13 'Regular' 'Segoe UI Symbol') $ui.Colors.pending 26 $y 30 30
+    for ($i = 0; $i -lt 8; $i++) {
+        $y = 88 + $i * 30
+        $ic = New-UaLabel '' (New-UaFont 13 'Regular' 'Segoe UI Symbol') $ui.Colors.pending 26 $y 30 28
         $ic.TextAlign = 'MiddleCenter'
         $ic.Visible = $false
-        $lb = New-UaLabel '' $ui.FontStep $ui.Colors.pending 60 $y 640 30
+        $lb = New-UaLabel '' $ui.FontStep $ui.Colors.pending 60 $y 640 28
         $lb.TextAlign = 'MiddleLeft'
         $lb.AutoEllipsis = $true
         $lb.Visible = $false
@@ -3043,24 +3056,24 @@ function Show-UaMainWindow {
         $ui.Icons += $ic
         $ui.Labels += $lb
     }
-    $ui.Pct = New-UaLabel 'Виконано: 0%' (New-UaFont 11 'Bold') $ui.Colors.text 26 408 668 24
+    $ui.Pct = New-UaLabel 'Виконано: 0%' (New-UaFont 11 'Bold') $ui.Colors.text 26 336 668 24
     $form.Controls.Add($ui.Pct)
     $bar = New-Object System.Windows.Forms.ProgressBar
-    $bar.SetBounds(26, 434, 668, 28)
+    $bar.SetBounds(26, 362, 668, 26)
     $bar.Minimum = 0
     $bar.Maximum = 100
     $form.Controls.Add($bar)
     $ui.Bar = $bar
-    $ui.Detail = New-UaLabel 'Зачекайте...' (New-UaFont 10) $ui.Colors.muted 26 468 668 52
+    $ui.Detail = New-UaLabel 'Зачекайте...' (New-UaFont 10) $ui.Colors.muted 26 394 668 50
     $form.Controls.Add($ui.Detail)
 
     $rp = New-Object System.Windows.Forms.Panel
-    $rp.SetBounds(20, 96, 680, 428)
+    $rp.SetBounds(20, 82, 680, 386)
     $rp.BackColor = [System.Drawing.Color]::White
     $rp.Visible = $false
     $form.Controls.Add($rp)
     $ui.ResultPanel = $rp
-    $ui.ResTitle = New-UaLabel '' (New-UaFont 18 'Bold') $ui.Colors.text 4 6 672 44
+    $ui.ResTitle = New-UaLabel '' (New-UaFont 17 'Bold') $ui.Colors.text 4 4 672 40
     $rp.Controls.Add($ui.ResTitle)
     $tb = New-Object System.Windows.Forms.TextBox
     $tb.Multiline = $true
@@ -3069,19 +3082,19 @@ function Show-UaMainWindow {
     $tb.BackColor = [System.Drawing.Color]::White
     $tb.ScrollBars = 'Vertical'
     $tb.Font = New-UaFont 12
-    $tb.SetBounds(6, 58, 668, 272)
+    $tb.SetBounds(6, 50, 668, 240)
     $tb.TabStop = $false
     $rp.Controls.Add($tb)
     $ui.ResBody = $tb
-    $ui.ResSay = New-UaLabel '' (New-UaFont 15 'Bold') $ui.Colors.fail 4 338 672 34
+    $ui.ResSay = New-UaLabel '' (New-UaFont 15 'Bold') $ui.Colors.fail 4 296 672 34
     $rp.Controls.Add($ui.ResSay)
-    $ui.ResLog = New-UaLabel '' (New-UaFont 9) $ui.Colors.muted 6 378 668 46
+    $ui.ResLog = New-UaLabel '' (New-UaFont 9) $ui.Colors.muted 6 334 668 48
     $rp.Controls.Add($ui.ResLog)
 
     $flow = New-Object System.Windows.Forms.FlowLayoutPanel
     $flow.FlowDirection = 'RightToLeft'
     $flow.WrapContents = $false
-    $flow.SetBounds(20, 540, 680, 50)
+    $flow.SetBounds(20, 476, 680, 50)
     $form.Controls.Add($flow)
     $ui.BtnClose = New-UaButton 'Закрити'
     $ui.BtnPlay = New-UaButton 'Запустити гру' $true
@@ -3104,6 +3117,15 @@ function Show-UaMainWindow {
         })
     $ui.BtnPlay.Add_Click({ try { Start-UaGame } catch { }; $global:HL2UA_Ui.Form.Close() })
     $ui.BtnTime.Add_Click({ try { Start-Process 'ms-settings:dateandtime' | Out-Null } catch { try { Start-Process 'timedate.cpl' | Out-Null } catch { } } })
+
+    # Маленький екран (ноутбук 1366x768 з масштабом 125%): вікно не має вилазити за панель задач.
+    try {
+        $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        if ($form.Height -gt $wa.Height) {
+            $form.StartPosition = 'Manual'
+            $form.Location = New-Object System.Drawing.Point(($wa.X + [int][Math]::Max(0, ($wa.Width - $form.Width) / 2)), $wa.Y)
+        }
+    } catch { }
 
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 150

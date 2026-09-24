@@ -1,4 +1,4 @@
-# Тести для HL2-UA-Installer.cmd.
+﻿# Тести для HL2-UA-Installer.cmd.
 #   Linux/macOS:  pwsh -File tools/hl2-ua/tests/run-tests.ps1
 #   Windows:      powershell.exe -ExecutionPolicy Bypass -File tools\hl2-ua\tests\run-tests.ps1 [-Gui]
 # Працює і в Windows PowerShell 5.1, і в PowerShell 7. Інтеграційні сценарії
@@ -521,6 +521,22 @@ if (-not $SkipIntegration -and $py) {
             Assert-True ([IO.File]::Exists($wav)) 'installed from local archive'
             Assert-True ([IO.File]::Exists($local)) 'user file kept (it existed before)'
             Assert-True (@($s.Result.Warnings | Where-Object { $_ -match 'Епізод 2' }).Count -gt 0) 'episodes reported as missing'
+            Remove-Item -LiteralPath $local
+            Assert-Eq (Invoke-Flow @(1)).Result.Kind 'uninstalled' 'cleanup uninstall'
+        }
+
+        Test-Case 'Integration 5b: one archive with the whole trilogy covers the episodes' {
+            $local = P $desktop 'Half-Life 2 UKR (озвучення+текст).zip'
+            New-TestZip $local @(
+                @('hl2_ukr/sound/vo/a.wav', 'A'),
+                @('episodic_ukr/sound/vo/b.wav', 'B'),
+                @('ep2_ukr/sound/vo/c.wav', 'C')
+            )
+            $s = Invoke-Flow @()
+            Assert-Eq $s.Result.Kind 'installed' 'result'
+            Assert-True ([IO.File]::Exists((P $game 'episodic_ukr' 'sound' 'vo' 'b.wav'))) 'episode 1 files from the main archive'
+            Assert-Eq @($s.Result.Warnings | Where-Object { $_ -match 'Епізод' }).Count 0 'no false warnings about episodes'
+            Assert-True (@($s.Result.InstalledFull) -contains 'ep1') 'ep1 reported as installed'
             Remove-Item -LiteralPath $local
             Assert-Eq (Invoke-Flow @(1)).Result.Kind 'uninstalled' 'cleanup uninstall'
         }

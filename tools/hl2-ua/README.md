@@ -7,8 +7,9 @@
 ## Як передати батькові
 
 1. **Надішли сам файл `.cmd`** у Telegram / Viber або скинь на флешку. Gmail такі файли блокує, навіть у zip.
-   Пряме посилання (після злиття в `master`):
-   `https://github.com/BavovnaIsTaken/dev-workflow-skills/raw/master/tools/hl2-ua/HL2-UA-Installer.cmd`
+   Пряме посилання на файл:
+   - уже зараз, з гілки: `https://github.com/BavovnaIsTaken/dev-workflow-skills/raw/claude/half-life-2-ukrainian-installer-6jmkzu/tools/hl2-ua/HL2-UA-Installer.cmd`
+   - після злиття в `master`: `https://github.com/BavovnaIsTaken/dev-workflow-skills/raw/master/tools/hl2-ua/HL2-UA-Installer.cmd`
 2. Windows може перепитати. Це нормально для будь-якого скрипта, завантаженого з інтернету:
    - **Chrome/Edge:** «Цей тип файлу може зашкодити» → **Зберегти**.
    - **Telegram:** «Файл може бути небезпечним. Запустити?» → **Запустити**.
@@ -118,10 +119,11 @@ powershell -ExecutionPolicy Bypass -File tools\hl2-ua\tests\run-tests.ps1 -Gui  
   - повне видалення;
   - ліміт → Steam Workshop;
   - зламаний список → локальний архів;
+  - один архів на всю трилогію (без хибних попереджень про Епізоди);
   - відмова від ручного завантаження;
   - збій посеред розпакування з повним відкатом;
   - битий файл.
-- **На Windows (`-Gui`)** ще й справжній запуск `cmd.exe → HL2-UA-Installer.cmd` з вікном, діалогами й кодами виходу.
+- **На Windows (`-Gui`)** ще й справжній запуск `cmd.exe → HL2-UA-Installer.cmd` з вікном, діалогами й кодами виходу, а також аудит макета. Кожен екран (прогрес, діалог, результат) перевіряється вимірюванням тексту: жодних обрізаних написів, кнопок, у які не влазить підпис, чи елементів за межами вікна. Знімки вікон CI зберігає як артефакт `hl2ua-window-screenshots`.
 
 CI: [`.github/workflows/hl2-ua-installer.yml`](../../.github/workflows/hl2-ua-installer.yml). Це Windows PowerShell 5.1 (як у батька) плюс PowerShell 7 на Linux.
 

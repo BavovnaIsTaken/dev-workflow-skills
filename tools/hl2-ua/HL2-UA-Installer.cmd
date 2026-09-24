@@ -44,6 +44,9 @@ $global:HL2UA_Config = @{
     ClockCheckUrl    = 'http://www.google.com/generate_204'
     InternetProbes   = @('drive.google.com:443', 'www.google.com:443')
     ExtraSteamRoots  = @()
+    ExtraGameDirs    = @()
+    # Конфіги емуляторів Steam у неліцензійних збірках (мова гри береться звідти).
+    EmulatorIniNames = @('steam_emu.ini', 'SmartSteamEmu.ini', 'SteamConfig.ini', 'cpy.ini', 'rev.ini', 'revApps.ini', 'ALI213.ini', 'valve.ini', '3dmgame.ini', 'rld.ini', 'codex.ini', 'steam_api.ini', 'ds.ini', 'hlm.ini', 'steam.ini')
     SkipDiskScan     = $false
     AutoCloseMs      = 0
     AutoDialogMs     = 0
@@ -730,10 +733,25 @@ function Get-UaSteamGameCandidates {
                     $global:HL2UA_BrokenSteamInstall = $acf
                 }
             }
+            # Без appmanifest це або справжній Steam (бібліотеку переносили), або «Steam-Rip».
+            $kind = 'other'
+            if (Test-UaRealSteam $root) { $kind = 'steam' }
             $dir = Join-UaPath $apps 'common' 'Half-Life 2'
-            if (Test-UaHl2Dir $dir) { @{ Dir = $dir; Kind = 'steam'; SteamRoot = $root; Library = $lib; AppId = '220'; Manifest = $null } }
+            if (Test-UaHl2Dir $dir) { @{ Dir = $dir; Kind = $kind; SteamRoot = $root; Library = $lib; AppId = '220'; Manifest = $null } }
+            # Старий формат Steam до 2013 року (його імітують старі збірки): steamapps\<акаунт>\half-life 2
+            try {
+                foreach ($sub in [IO.Directory]::GetDirectories($apps)) {
+                    if ([IO.Path]::GetFileName($sub) -in 'common', 'downloading', 'shadercache', 'workshop', 'temp', 'sourcemods', 'compatdata') { continue }
+                    $old = Join-UaPath $sub 'half-life 2'
+                    if (Test-UaHl2Dir $old) { @{ Dir = $old; Kind = 'other'; SteamRoot = $root; Library = $lib; AppId = '220'; Manifest = $null } }
+                }
+            } catch { }
         }
     }
+}
+
+function Test-UaRealSteam([string]$Root) {
+    return ([IO.File]::Exists((Join-UaPath $Root 'steam.exe')) -and [IO.Directory]::Exists((Join-UaPath $Root 'userdata')))
 }
 
 function Select-UaUniqueCandidates($Cands) {
@@ -760,10 +778,13 @@ function Find-UaOtherHalfLife {
 function Get-UaShortcutTargets {
     $shell = $null
     try { $shell = New-Object -ComObject WScript.Shell } catch { return }
-    $dirs = @()
+    $dirs = New-Object System.Collections.Generic.List[string]
+    $cands = @((Get-UaDesktop))
     foreach ($sf in @('Desktop', 'CommonDesktopDirectory', 'StartMenu', 'CommonStartMenu')) {
-        try { $p = [Environment]::GetFolderPath($sf); if ($p -and [IO.Directory]::Exists($p)) { $dirs += $p } } catch { }
+        try { $cands += [Environment]::GetFolderPath($sf) } catch { }
     }
+    if ($env:APPDATA) { $cands += Join-UaPath $env:APPDATA 'Microsoft' 'Internet Explorer' 'Quick Launch' }
+    foreach ($p in $cands) { Add-UaUniqueDir $dirs $p }
     foreach ($d in $dirs) {
         $files = @()
         try { $files = @(Get-ChildItem -LiteralPath $d -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue) } catch { }
@@ -778,6 +799,7 @@ function Get-UaShortcutTargets {
 
 function Get-UaNonSteamCandidates {
     $dirs = New-Object System.Collections.Generic.List[string]
+    foreach ($x in @($global:HL2UA_Config.ExtraGameDirs)) { Add-UaUniqueDir $dirs $x }
     foreach ($k in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall')) {
         $subs = @()
         try { $subs = @(Get-ChildItem -LiteralPath $k -ErrorAction Stop) } catch { continue }
@@ -794,11 +816,19 @@ function Get-UaNonSteamCandidates {
             } catch { }
         }
     }
+    # Ярлики збірок часто ведуть не на hl2.exe, а на власний лаунчер у папці гри чи в bin\.
     foreach ($t in @(Get-UaShortcutTargets)) {
-        if ($t.Target -match '(?i)[\\/]hl2(_win64)?\.exe$') { Add-UaUniqueDir $dirs ([IO.Path]::GetDirectoryName($t.Target)) }
+        if (-not $t.Target -or $t.Target -notmatch '(?i)\.exe$') { continue }
+        try {
+            $d = [IO.Path]::GetDirectoryName($t.Target)
+            for ($up = 0; $up -lt 3 -and $d; $up++) {
+                if (Test-UaHl2Dir $d) { Add-UaUniqueDir $dirs $d; break }
+                $d = [IO.Path]::GetDirectoryName($d)
+            }
+        } catch { }
     }
     foreach ($d in @(Get-UaFixedDrives)) {
-        foreach ($base in @($d, (Join-UaPath $d 'Games'), (Join-UaPath $d 'Ігри'), (Join-UaPath $d 'Игры'), (Join-UaPath $d 'Program Files (x86)'), (Join-UaPath $d 'Program Files'))) {
+        foreach ($base in @($d, (Join-UaPath $d 'Games'), (Join-UaPath $d 'Ігри'), (Join-UaPath $d 'Игры'), (Join-UaPath $d 'Program Files (x86)'), (Join-UaPath $d 'Program Files'), (Join-UaPath $d 'Valve'), (Join-UaPath $d 'Games' 'Valve'), (Join-UaPath $d 'Program Files (x86)' 'Valve'), (Join-UaPath $d 'Program Files' 'Valve'))) {
             try {
                 foreach ($sub in [IO.Directory]::GetDirectories($base)) {
                     if ([IO.Path]::GetFileName($sub) -match '(?i)half[\s._-]*life[\s._-]*2|^hl2|халф') { Add-UaUniqueDir $dirs $sub }
@@ -1913,10 +1943,100 @@ function Update-UaSteamLaunchOptions($ctx, [string]$Mode, $Records) {
     }
 }
 
-function Set-UaShortcutLanguage($ctx) {
+# ---- неліцензійні збірки: мова в конфігу емулятора Steam ----
+
+function Set-UaIniLanguage([string]$Text, [string]$Lang) {
+    $rx = New-Object System.Text.RegularExpressions.Regex('(?im)^([ \t]*Language[ \t]*=[ \t]*)([^\r\n;#]*)')
+    return $rx.Replace($Text, { param($m) $m.Groups[1].Value + $Lang })
+}
+
+# gbe_fork: steam_settings\configs.user.ini, ключ language у секції [user::general].
+function Set-UaGbeLanguage([string]$Text, [string]$Lang) {
+    if ($Text -match '(?im)^[ \t]*language[ \t]*=') { return (Set-UaIniLanguage $Text $Lang) }
+    $nl = "`n"
+    if ($Text.Contains("`r`n")) { $nl = "`r`n" }
+    $m = [regex]::Match($Text, '(?im)^[ \t]*\[user::general\][ \t]*(?=\r?$)')
+    if ($m.Success) { return $Text.Insert($m.Index + $m.Length, $nl + 'language=' + $Lang) }
+    $sep = ''
+    if ($Text.Length -gt 0 -and -not $Text.EndsWith("`n")) { $sep = $nl }
+    return $Text + $sep + '[user::general]' + $nl + 'language=' + $Lang + $nl
+}
+
+function Get-UaEmulatorConfigs([string]$GameDir) {
+    $seen = @{}
+    foreach ($d in @($GameDir, (Join-UaPath $GameDir 'bin'), (Join-UaPath $GameDir 'bin' 'win64'), (Join-UaPath $GameDir 'bin' 'x64'))) {
+        if (-not [IO.Directory]::Exists($d)) { continue }
+        foreach ($name in @($global:HL2UA_Config.EmulatorIniNames)) {
+            $f = Join-UaPath $d $name
+            if ([IO.File]::Exists($f) -and -not $seen.ContainsKey($f.ToLowerInvariant())) {
+                $seen[$f.ToLowerInvariant()] = $true
+                @{ Kind = 'ini'; Path = $f }
+            }
+        }
+        $ss = Join-UaPath $d 'steam_settings'
+        if ([IO.Directory]::Exists($ss)) {
+            @{ Kind = 'force'; Path = (Join-UaPath $ss 'force_language.txt') }
+            $cu = Join-UaPath $ss 'configs.user.ini'
+            if ([IO.File]::Exists($cu)) { @{ Kind = 'gbe'; Path = $cu } }
+        }
+    }
+}
+
+# Перед зміною чужого файлу кладемо оригінал у резервну копію і пишемо в журнал,
+# щоб видалення українізатора повернуло все як було.
+function Backup-UaFileForEdit($ctx, [string]$Path) {
+    $rel = Get-UaRelPath $ctx.GameDir $Path
+    if (-not $rel) { return }
+    $key = $rel.ToLowerInvariant()
+    if ($ctx.Tracked.Contains($key)) { return }
+    $data = Get-UaDataDir $ctx
+    [void][IO.Directory]::CreateDirectory($data)
+    if (-not $ctx.JournalPath) { $ctx.JournalPath = Join-UaPath $data 'journal.txt' }
+    if ([IO.File]::Exists($Path)) {
+        $b = Join-UaPath $data 'backup' $rel
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($b))
+        [IO.File]::Copy($Path, $b, $true)
+        Add-UaJournal $ctx $null 'R' $rel
+    } else {
+        Add-UaJournal $ctx $null 'N' $rel
+    }
+    [void]$ctx.Tracked.Add($key)
+}
+
+# Повертає $true, якщо мову вдалося прописати хоча б в один конфіг емулятора.
+function Set-UaEmulatorLanguage($ctx) {
+    $lang = 'ukr'
+    $changed = 0
+    foreach ($c in @(Get-UaEmulatorConfigs $ctx.GameDir)) {
+        try {
+            $old = ''
+            if ([IO.File]::Exists($c.Path)) { $old = [IO.File]::ReadAllText($c.Path) }
+            switch ($c.Kind) {
+                'ini' { $new = Set-UaIniLanguage $old $lang }
+                'gbe' { $new = Set-UaGbeLanguage $old $lang }
+                default { $new = $lang }
+            }
+            if ($new -ceq $old) {
+                if ($old -match '(?im)^[ \t]*language[ \t]*=[ \t]*ukr' -or $old.Trim() -eq $lang) { $changed++ }
+                continue
+            }
+            Backup-UaFileForEdit $ctx $c.Path
+            Clear-UaReadOnly $c.Path
+            [IO.File]::WriteAllText($c.Path, $new, (New-Object Text.UTF8Encoding($false)))
+            Write-UaLog ('Emulator language set in {0} ({1})' -f $c.Path, $c.Kind)
+            $changed++
+        } catch { Write-UaLog ('Emulator config update failed {0}: {1}' -f $c.Path, $_.Exception.Message) 'WARN' }
+    }
+    return ($changed -gt 0)
+}
+
+function Set-UaShortcutLanguage($ctx, [bool]$EmulatorConfigured = $false) {
     $shell = $null
     try { $shell = New-Object -ComObject WScript.Shell } catch { }
-    if (-not $shell) { $ctx.Warnings.Add('Додайте до ярлика гри параметр запуску: -language ukr'); return }
+    if (-not $shell) {
+        if (-not $EmulatorConfigured) { $ctx.Warnings.Add('Додайте до ярлика гри параметр запуску: -language ukr') }
+        return
+    }
     $found = 0
     foreach ($t in @(Get-UaShortcutTargets)) {
         if (-not $t.Target -or $t.Target -notmatch '(?i)\.exe$') { continue }
@@ -1931,10 +2051,11 @@ function Set-UaShortcutLanguage($ctx) {
                 $ctx.ShortcutChanges.Add(@{ Path = $t.Path; Before = $before; After = $after; Created = $false })
                 Write-UaLog ('Shortcut {0}: "{1}" -> "{2}"' -f $t.Path, $before, $after)
             }
+            if (-not $ctx.LaunchShortcut) { $ctx.LaunchShortcut = $t.Path }
             $found++
         } catch { Write-UaLog ('Shortcut update failed {0}: {1}' -f $t.Path, $_.Exception.Message) 'WARN' }
     }
-    if ($found -gt 0) { return }
+    if ($found -gt 0 -or $EmulatorConfigured) { return }
     $exe = Get-UaGameExe $ctx.GameDir
     if (-not $exe) { $ctx.Warnings.Add('Додайте до ярлика гри параметр запуску: -language ukr'); return }
     $lnk = Join-UaPath (Get-UaDesktop) 'Half-Life 2 (українською).lnk'
@@ -1945,6 +2066,7 @@ function Set-UaShortcutLanguage($ctx) {
     $sc.IconLocation = $exe + ',0'
     $sc.Save()
     $ctx.ShortcutChanges.Add(@{ Path = $lnk; Before = ''; After = $global:HL2UA_Config.LaunchArgs; Created = $true })
+    $ctx.LaunchShortcut = $lnk
     $ctx.Warnings.Add('Запускайте гру ярликом «Half-Life 2 (українською)» на Робочому столі.')
 }
 
@@ -2151,6 +2273,7 @@ function New-UaContext {
         InstalledText    = @{}
         LaunchChanges    = (New-Object System.Collections.Generic.List[object])
         ShortcutChanges  = (New-Object System.Collections.Generic.List[object])
+        LaunchShortcut   = $null
         ReplacePrevious  = $false
         PreviousRemoved  = $false
         PreviousManifest = $null
@@ -2517,6 +2640,11 @@ function Invoke-UaFlow($ctx) {
     $ctx.GameDir = [string]$game.Dir
     $ctx.IsSteam = ($game.Kind -eq 'steam')
     Write-UaLog ('Game: {0} (kind: {1}, app: {2})' -f $ctx.GameDir, $game.Kind, (Get-UaProp $game 'AppId'))
+    $isNew = [IO.File]::Exists((Join-UaPath $ctx.GameDir 'hl2_complete' 'gameinfo.txt'))
+    Write-UaLog ('Anniversary (2024+) build: ' + $isNew)
+    if (-not $ctx.IsSteam -and -not $isNew) {
+        $ctx.Warnings.Add('У вас стара версія гри (до оновлення 2024 року), а українізатор зроблено для нової. Якщо щось лишиться англійською — скажіть синові.')
+    }
     Set-UaProgress -Detail ('Знайдено гру: ' + $ctx.GameDir)
     if ($ctx.IsSteam) { Wait-UaSteamAppReady $game }
     Close-UaRunningGame $ctx
@@ -2591,7 +2719,11 @@ function Invoke-UaFlow($ctx) {
 
     Enter-UaStep 'lang'
     if ($ctx.IsSteam) { Update-UaSteamLaunchOptions $ctx 'add' $null }
-    else { Set-UaShortcutLanguage $ctx }
+    else {
+        Set-UaProgress -Detail 'Вмикаю українську мову в налаштуваннях гри і в ярликах...'
+        $emu = Set-UaEmulatorLanguage $ctx
+        Set-UaShortcutLanguage $ctx $emu
+    }
     if ($ctx.Strategy -eq 'workshop') { Invoke-UaWorkshopSubscribe $ctx }
     Complete-UaStep 'lang'
 
@@ -2643,7 +2775,7 @@ function Invoke-UaWorkerMain {
         if ($ctx.GameDir) { $exe = Get-UaGameExe $ctx.GameDir }
         $s.Result = @{
             Kind = $kind; Warnings = @($ctx.Warnings); Strategy = $ctx.Strategy; IsSteam = $ctx.IsSteam
-            GameDir = $ctx.GameDir; Exe = $exe; Parts = @($ctx.Parts); InstalledFull = @(@($ctx.InstalledFull.Keys) + @($ctx.Covered.Keys) | Select-Object -Unique)
+            GameDir = $ctx.GameDir; Exe = $exe; LaunchShortcut = $ctx.LaunchShortcut; Parts = @($ctx.Parts); InstalledFull = @(@($ctx.InstalledFull.Keys) + @($ctx.Covered.Keys) | Select-Object -Unique)
         }
         Write-UaLog ('RESULT: ' + $kind)
     } catch {
@@ -3018,6 +3150,7 @@ function Restart-UaWorker {
 function Start-UaGame {
     $r = $global:HL2UA_State.Result
     if ($r.IsSteam) { Start-Process ('steam://rungameid/' + $global:HL2UA_Config.SteamAppId) | Out-Null; return }
+    if ($r.LaunchShortcut -and [IO.File]::Exists([string]$r.LaunchShortcut)) { Start-Process -FilePath ([string]$r.LaunchShortcut) | Out-Null; return }
     if ($r.Exe) { Start-Process -FilePath $r.Exe -ArgumentList $global:HL2UA_Config.LaunchArgs -WorkingDirectory $r.GameDir | Out-Null }
 }
 

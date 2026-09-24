@@ -310,6 +310,15 @@ Test-Case 'Error mapping' {
     Assert-True (-not (Test-UaTransient (New-UaError 35))) 'coded errors are final'
 }
 
+Test-Case 'Emulator configs of non-Steam builds' {
+    Assert-Eq (Set-UaIniLanguage "[Settings]`r`nLanguage=english`r`nUserName=Player`r`n" 'ukr') "[Settings]`r`nLanguage=ukr`r`nUserName=Player`r`n" 'codex/ali213 ini (CRLF)'
+    Assert-Eq (Set-UaIniLanguage "[SmartSteamEmu]`nlanguage = russian ; comment`n" 'ukr') "[SmartSteamEmu]`nlanguage = ukr; comment`n" 'spaces, case and comment'
+    Assert-Eq (Set-UaIniLanguage "[Settings]`nUILanguage=english`n" 'ukr') "[Settings]`nUILanguage=english`n" 'other keys untouched'
+    Assert-Eq (Set-UaGbeLanguage "[user::general]`r`naccount_name=Dad`r`n" 'ukr') "[user::general]`r`nlanguage=ukr`r`naccount_name=Dad`r`n" 'gbe: key inserted (CRLF)'
+    Assert-Eq (Set-UaGbeLanguage "[user::general]`nlanguage=english`n" 'ukr') "[user::general]`nlanguage=ukr`n" 'gbe: key replaced'
+    Assert-Eq (Set-UaGbeLanguage '' 'ukr') "[user::general]`nlanguage=ukr`n" 'gbe: empty file'
+}
+
 Test-Case 'Progress weighting' {
     $s = New-UaState
     $s.Steps = @(@{ Key = 'a'; Title = 'a'; Weight = 10; Status = 'done' }, @{ Key = 'b'; Title = 'b'; Weight = 30; Status = 'running' }, @{ Key = 'c'; Title = 'c'; Weight = 60; Status = 'pending' })
@@ -573,6 +582,49 @@ if (-not $SkipIntegration -and $py) {
             $log = Read-Text $s.LogPath
             Assert-True ($log.Contains('Corrupt download; retrying once')) 'retried once'
             Assert-True (@(Get-ChildItem -LiteralPath $tmpDir -Recurse -Filter '*.zip*' -ErrorAction SilentlyContinue).Count -eq 0) 'corrupt files deleted'
+        }
+
+        Set-DriveConfig @{ hl2 = 'normal'; ep1 = 'normal'; ep2 = 'normal' }
+        Test-Case 'Integration 10: pirated copy (no Steam) -> emulator configs switched to Ukrainian' {
+            $pgame = P $work 'Games' 'Half-Life 2 RePack'
+            Write-Text (P $pgame 'hl2.exe') 'fake'
+            Write-Text (P $pgame 'hl2' 'gameinfo.txt') 'GameInfo {}'
+            Write-Text (P $pgame 'steam_api.dll') 'fake'
+            Write-Text (P $pgame 'steam_emu.ini') "[Settings]`r`nLanguage=english`r`nUserName=Dad`r`n"
+            Write-Text (P $pgame 'steam_settings' 'force_language.txt') 'english'
+            $cfg.ExtraSteamRoots = @()
+            $cfg.ExtraGameDirs = @($pgame)
+            try {
+                $s = Invoke-Flow @()
+                Assert-Eq $s.Result.Kind 'installed' 'result'
+                Assert-True (-not $s.Result.IsSteam) 'non-Steam copy'
+                Assert-True ([IO.File]::Exists((P $pgame 'hl2_ukr' 'sound' 'vo' 'breen' 'br_welcome.wav'))) 'files installed'
+                Assert-Eq (Read-Text (P $pgame 'steam_emu.ini')) "[Settings]`r`nLanguage=ukr`r`nUserName=Dad`r`n" 'emulator ini language'
+                Assert-Eq (Read-Text (P $pgame 'steam_settings' 'force_language.txt')) 'ukr' 'goldberg force_language'
+                Assert-True (@($s.Result.Warnings | Where-Object { $_ -match 'стара версія' }).Count -eq 1) 'old build warning (no hl2_complete)'
+                Assert-True (-not [IO.File]::Exists((P $desktop 'Half-Life 2 (українською).lnk'))) 'no extra desktop shortcut when the emulator is configured'
+                $u = Invoke-Flow @(1)
+                Assert-Eq $u.Result.Kind 'uninstalled' 'uninstall'
+                Assert-Eq (Read-Text (P $pgame 'steam_emu.ini')) "[Settings]`r`nLanguage=english`r`nUserName=Dad`r`n" 'emulator ini restored'
+                Assert-Eq (Read-Text (P $pgame 'steam_settings' 'force_language.txt')) 'english' 'force_language restored'
+                Assert-True (-not [IO.Directory]::Exists((P $pgame 'hl2_ukr'))) 'files removed'
+            } finally {
+                $cfg.ExtraSteamRoots = @($steam)
+                $cfg.ExtraGameDirs = @()
+            }
+        }
+
+        Test-Case 'Old Steam-Rip layout (steamapps\<user>\half-life 2) is found as non-Steam' {
+            $rip = P $work 'OldRip'
+            $ripGame = P $rip 'steamapps' 'player' 'half-life 2'
+            Write-Text (P $ripGame 'hl2.exe') 'fake'
+            Write-Text (P $ripGame 'hl2' 'gameinfo.txt') 'GameInfo {}'
+            $cfg.ExtraSteamRoots = @($rip)
+            try {
+                $c = @(Get-UaSteamGameCandidates | Where-Object { $_.Dir -ieq $ripGame })
+                Assert-Eq $c.Count 1 'found'
+                Assert-Eq $c[0].Kind 'other' 'not treated as real Steam'
+            } finally { $cfg.ExtraSteamRoots = @($steam) }
         }
 
         if ($Gui) {

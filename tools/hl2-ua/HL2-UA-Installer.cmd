@@ -442,7 +442,7 @@ function Request-UaChoice {
     param([string]$Text, [string[]]$Buttons = @('OK'), [string]$Title = 'Українізатор Half-Life 2')
     $s = $global:HL2UA_State
     if (-not $s -or $s.Headless) {
-        $ans = 0
+        $ans = [Math]::Max(0, $Buttons.Count - 1)
         if ($s -and $s.AutoAnswers -and $s.AutoAnswers.Count -gt 0) { $ans = [int]$s.AutoAnswers.Dequeue() }
         Write-UaLog ('PROMPT (auto -> {0}): {1}' -f $ans, ($Text -replace "`r?`n", ' | '))
         return $ans
@@ -1714,6 +1714,7 @@ function Get-UaZipPlan($Zip) {
     $res = Find-UaInstallPrefix $names.ToArray()
     if (-not $res.Mapped) { return $plan }
     $plan.Prefix = $res.Prefix
+    $prefix = $res.Prefix
     foreach ($pair in $all) {
         $e = $pair[0]
         $n = [string]$pair[1]

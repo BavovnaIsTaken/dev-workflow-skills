@@ -28,7 +28,10 @@ $global:HL2UA_Config = @{
     DriveFolderId    = '1fIiZz8xwNdMX7tzOpxOGTlilDqkg3pVa'
     # Запасний варіант, якщо список файлів папки колись не вдасться отримати:
     # @{ Part = 'hl2'; Type = 'full'; Id = '<id файлу на Drive>'; Name = 'Half-Life 2 UKR (озвучення+текст).zip' }
-    KnownFiles       = @()
+    KnownFiles       = @(
+        @{ Part = 'hl2'; Type = 'full'; Id = '1ZinC2ImCJD22fPyfLwJYaFac9OUu1THV'; Name = 'Half-Life 2 + Episode 1 + Episode 2 UKR (voice+text).zip' },
+        @{ Part = 'hl2'; Type = 'text'; Id = '1Cigpw4EThWhVg92Qy5enVmfkmaLGBghL'; Name = 'Half-Life 2 + Episode 1 + Episode 2 UKR (текст).zip' }
+    )
     WorkshopItems    = @{ hl2 = '3374817799'; ep1 = '3547695650'; ep2 = '3583786172' }
     SteamAppId       = '220'
     ExtraSteamAppIds = @('380', '420')
@@ -1517,17 +1520,25 @@ function Receive-UaDriveFile($Job, [string]$OutFile) {
 function Get-UaArchiveInfo([string]$Path) {
     $n = $Path.ToLowerInvariant()
     $ext = [IO.Path]::GetExtension($n)
-    $part = 'hl2'
+    if ($n -match '\.tar\.gz$|\.tgz$') { $ext = '.tar.gz' }
+    $base = ($n -match 'half[\s._-]*life[\s._-]*2') -or ($n -match '(?<![a-z0-9])hl2(?![a-z])')
     $lead = '(?<![a-zа-яіїєґ])(епізод|эпизод|episode|ep|еп)[\s._-]*'
-    if ($n -match ($lead + '(2|два|two|ii|друг[а-яіїєґ]*)(?![0-9a-zа-яіїєґ])') -or $n -match '(?<![a-z])ep2(?![0-9])') { $part = 'ep2' }
-    elseif ($n -match ($lead + '(1|один|одна|one|i|перш[а-яіїєґ]*)(?![0-9a-zа-яіїєґ])') -or $n -match '(?<![a-z])(ep1|episodic)(?![0-9])') { $part = 'ep1' }
+    $hasEp2 = ($n -match ($lead + '(2|два|two|ii|друг[а-яіїєґ]*)(?![0-9a-zа-яіїєґ])')) -or ($n -match '(?<![a-z])ep2(?![0-9])')
+    $hasEp1 = ($n -match ($lead + '(1|один|одна|one|i|перш[а-яіїєґ]*)(?![0-9a-zа-яіїєґ])')) -or ($n -match '(?<![a-z])(ep1|episodic)(?![0-9])')
+    # Об'єднаний архів (уся трилогія або «HL2 + Episode …») ставиться як головний і покриває епізоди.
+    $combined = ($hasEp1 -and $hasEp2) -or ($base -and ($n -match 'half[\s._-]*life[\s._-]*2\s*\+\s*(episode|episodic|еп)'))
+    $part = 'hl2'
+    if ($combined) { $part = 'hl2' }
+    elseif ($hasEp2) { $part = 'ep2' }
+    elseif ($hasEp1) { $part = 'ep1' }
     elseif ($n -match 'lost\s*coast') { $part = 'lostcoast' }
     elseif ($n -match 'deathmatch|hl2dm|(?<![a-z])dm(?![a-z])') { $part = 'hl2dm' }
     $type = 'other'
-    if ($n -match 'озвуч|дубляж|voice|dub') { $type = 'full' }
+    if ($n -match 'linux|steamdeck|steam deck' -or $ext -in '.tar.gz', '.tgz', '.tar') { $type = 'linux' }
+    elseif ($n -match 'озвуч|дубляж|voice|dub') { $type = 'full' }
     elseif ($n -match 'текст(?!ур)|text(?!ure)|субтитр') { $type = 'text' }
     elseif ($n -match 'текстур|texture') { $type = 'textures' }
-    return @{ Part = $part; Type = $type; Ext = $ext }
+    return @{ Part = $part; Type = $type; Ext = $ext; Combined = $combined }
 }
 
 function Compare-UaVersionName([string]$A, [string]$B) {
@@ -1548,11 +1559,12 @@ function Select-UaArchives($Listing, [string[]]$Parts) {
         $info = Get-UaArchiveInfo $e.Path
         if (-not $sel.ContainsKey($info.Part)) { continue }
         $slot = $sel[$info.Part]
-        if ($info.Ext -notin '.zip', '.7z', '.rar', '') { continue }
+        if ($info.Type -eq 'linux') { continue }
         if ($info.Ext -in '.7z', '.rar') {
             if ($info.Type -in 'full', 'other') { $slot.Unsupported = $e }
             continue
         }
+        if ($info.Ext -ne '.zip') { continue }
         $key = $null
         if ($info.Type -eq 'full') { $key = 'Full' }
         elseif ($info.Type -eq 'text') { $key = 'Text' }
@@ -1592,28 +1604,65 @@ function Test-UaZipOpens([string]$Path) {
     } catch { return $false }
 }
 
-# Шукаємо в архіві «корінь гри»: теку, де лежать hl2/, platform/, *_ukr/ тощо.
-function Find-UaZipRootPrefix([string[]]$Names) {
-    # Теки, що бувають лише в корені гри (bin трапляється й усередині hl2/, тому окремо).
-    $rootOnly = '^(hl2|hl2_complete|episodic|ep2|lostcoast|platform|hl2mp|[a-z0-9_]+_(ukr|ukrainian|ua))$'
-    $best = $null
-    $bestDepth = [int]::MaxValue
-    foreach ($n in $Names) {
-        $parts = $n.Split('/')
-        $limit = [Math]::Min($parts.Length - 1, $bestDepth)
-        for ($k = 0; $k -lt $limit; $k++) {
-            if ($parts[$k] -match $rootOnly -or $parts[$k] -eq 'bin') {
-                # «HL2/hl2_ukr/...» — зовнішня HL2 лише обгортка архіву.
-                while ($k + 1 -lt $parts.Length - 1 -and $parts[$k + 1] -match $rootOnly) { $k++ }
-                if ($k -lt $bestDepth) {
-                    $bestDepth = $k
-                    if ($k -eq 0) { $best = '' } else { $best = ($parts[0..($k - 1)] -join '/') + '/' }
-                }
-                break
+# Тека, що є підпапкою кореня гри Half-Life (куди кладеться вміст архіву).
+function Test-UaGameFolderName([string]$Name) {
+    $n = $Name.ToLowerInvariant()
+    if ($n -in 'hl2', 'hl2_complete', 'episodic', 'ep1', 'ep2', 'lostcoast', 'hl2_lostcoast', 'platform', 'bin', 'hl2mp', 'update') { return $true }
+    if ($n -match '_(ukr|ukrainian|ua)$') { return $true }
+    if ($n -match '^hl2') { return $true }
+    return $false
+}
+
+# Назва, що однозначно вказує на вміст движка Source (тека/файл всередині гри).
+function Test-UaContentChild([string]$Name) {
+    $n = $Name.ToLowerInvariant()
+    if ($n -in 'resource', 'sound', 'materials', 'models', 'maps', 'scripts', 'particles', 'cfg', 'custom', 'media', 'gameinfo.txt') { return $true }
+    return ($n -match '\.vpk$')
+}
+
+function Test-UaJunkLeaf([string]$Leaf) {
+    if (-not $Leaf) { return $true }
+    if ($Leaf -in '.DS_Store', 'Thumbs.db', 'desktop.ini') { return $true }
+    return $Leaf.StartsWith('._')
+}
+
+function Test-UaDocLeaf([string]$Leaf) {
+    return ($Leaf -match '(?i)\.(txt|url|pdf|docx?|rtf|md|nfo|html?|jpe?g|png|lnk)$')
+}
+
+# Офіційне правило HamUA: «вміст архіву скопіюйте в папку Half-Life 2». Тобто корінь
+# архіву кладеться в корінь гри. Єдиний нюанс — архів може бути загорнутий в одну теку
+# (напр. «Half-Life 2 UKR/»); тоді розгортаємо її. Повертає @{ Prefix; Mapped }.
+function Find-UaInstallPrefix([string[]]$Names) {
+    $prefix = ''
+    for ($depth = 0; $depth -lt 8; $depth++) {
+        $dirSeen = @{}
+        $dirOrder = New-Object System.Collections.Generic.List[string]
+        $realFiles = 0
+        $gameHere = $false
+        $contentHere = $false
+        foreach ($n in $Names) {
+            if (-not $n.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $rest = $n.Substring($prefix.Length)
+            if ($rest -eq '') { continue }
+            $slash = $rest.IndexOf('/')
+            if ($slash -lt 0) {
+                if (-not (Test-UaJunkLeaf $rest) -and -not (Test-UaDocLeaf $rest)) { $realFiles++ }
+                if (Test-UaContentChild $rest) { $contentHere = $true }
+                continue
             }
+            $seg = $rest.Substring(0, $slash)
+            if ($seg -ieq '__MACOSX') { continue }
+            $lk = $seg.ToLowerInvariant()
+            if (-not $dirSeen.ContainsKey($lk)) { $dirSeen[$lk] = $true; $dirOrder.Add($seg) }
+            if (Test-UaGameFolderName $seg) { $gameHere = $true }
+            if (Test-UaContentChild $seg) { $contentHere = $true }
         }
+        if ($gameHere -or $contentHere) { return @{ Prefix = $prefix; Mapped = $true } }
+        if ($dirOrder.Count -eq 1 -and $realFiles -eq 0) { $prefix = $prefix + $dirOrder[0] + '/'; continue }
+        return @{ Prefix = $prefix; Mapped = $false }
     }
-    return $best
+    return @{ Prefix = $prefix; Mapped = $false }
 }
 
 function Test-UaSafeRelPath([string]$Rel) {
@@ -1629,11 +1678,26 @@ function Test-UaSafeRelPath([string]$Rel) {
 function Test-UaJunkEntry([string]$Rel) {
     if ($Rel -match '(^|/)__MACOSX/') { return $true }
     $leaf = $Rel.Split('/')[-1]
-    if ($leaf -in '.DS_Store', 'Thumbs.db', 'desktop.ini') { return $true }
-    if ($leaf.StartsWith('._')) { return $true }
-    # Файли прямо в корені (readme, інструкції) у папку гри не кладемо.
-    if (-not $Rel.Contains('/')) { return $true }
+    if (Test-UaJunkLeaf $leaf) { return $true }
+    # Файли прямо в корені гри (readme, інструкції тощо) не кладемо.
+    if (-not $Rel.Contains('/') -and (Test-UaDocLeaf $leaf)) { return $true }
     return $false
+}
+
+# Дамп структури архіву на Робочий стіл — щоб у разі невпізнаної будови її легко переслати.
+function Save-UaArchiveDump($Plan) {
+    $desk = Get-UaDesktop
+    if (-not $desk) { $desk = [IO.Path]::GetTempPath() }
+    $path = Join-UaPath $desk 'hl2ua-archive-structure.txt'
+    try {
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add('top-level: ' + (@($Plan.TopLevel) -join ', '))
+        $lines.Add('')
+        $i = 0
+        foreach ($n in @($Plan.TopNames)) { if ($i -ge 400) { break }; $lines.Add([string]$n); $i++ }
+        [IO.File]::WriteAllLines($path, $lines.ToArray(), (New-Object Text.UTF8Encoding($false)))
+    } catch { Write-UaLog ('Could not write archive dump: ' + $_.Exception.Message) 'WARN' }
+    return $path
 }
 
 function Get-UaZipPlan($Zip) {
@@ -1646,10 +1710,10 @@ function Get-UaZipPlan($Zip) {
         $names.Add($n)
     }
     $top = @($names | ForEach-Object { $_.Split('/')[0] } | Select-Object -Unique | Select-Object -First 15)
-    $plan = @{ Prefix = $null; Items = (New-Object System.Collections.Generic.List[object]); TotalBytes = 0L; Skipped = 0; TopLevel = $top }
-    $prefix = Find-UaZipRootPrefix $names.ToArray()
-    if ($null -eq $prefix) { return $plan }
-    $plan.Prefix = $prefix
+    $plan = @{ Prefix = $null; Items = (New-Object System.Collections.Generic.List[object]); TotalBytes = 0L; Skipped = 0; TopLevel = $top; TopNames = $names.ToArray() }
+    $res = Find-UaInstallPrefix $names.ToArray()
+    if (-not $res.Mapped) { return $plan }
+    $plan.Prefix = $res.Prefix
     foreach ($pair in $all) {
         $e = $pair[0]
         $n = [string]$pair[1]
@@ -1758,7 +1822,10 @@ function Install-UaArchive($ctx, $Job, [string]$ZipPath) {
         Set-UaJobProgress $Job 'install' 0 'Перевіряю вміст архіву...'
         $plan = Get-UaZipPlan $zip
         Write-UaLog ('Archive plan: prefix="{0}", {1} files, {2} bytes, {3} skipped, top-level: {4}' -f $plan.Prefix, $plan.Items.Count, $plan.TotalBytes, $plan.Skipped, ($plan.TopLevel -join ', '))
-        if ($plan.Items.Count -eq 0) { throw (New-UaError 51 ('no installable entries; top-level: ' + ($plan.TopLevel -join ', '))) }
+        if ($plan.Items.Count -eq 0) {
+            $dump = Save-UaArchiveDump $plan
+            throw (New-UaError -Code 51 -Detail ('no installable entries; top-level: ' + ($plan.TopLevel -join ', ')) -Extra ('Будову архіву збережено у файл «' + $dump + '» — надішліть його синові.'))
+        }
         $existing = 0L
         foreach ($it in $plan.Items) {
             $t = Join-UaPath $ctx.GameDir $it.Rel
@@ -2479,13 +2546,22 @@ function Test-UaDownloadedFile([string]$Path, [bool]$Own) {
 }
 
 # Якщо архів уже лежить у «Завантаженнях» (наприклад, син скачав вручну) — беремо його.
+# Чи схоже імʼя файлу на справжній українізатор HamUA (а не випадковий zip).
+function Test-UaUaArchiveName([string]$Name) {
+    $n = $Name.ToLowerInvariant()
+    if ($n -notmatch '\.zip$') { return $false }
+    if ($n -notmatch 'ukr|укр|україн|украї|hamua') { return $false }
+    return ($n -match 'half[\s._-]*life|hl2|халф')
+}
+
 function Find-UaLocalArchive($Job) {
     if ($Job.Mode -eq 'text') { return $null }
     $dirs = @((Get-UaDownloadsDir), (Get-UaDesktop)) | Where-Object { $_ -and [IO.Directory]::Exists($_) } | Select-Object -Unique
     foreach ($d in $dirs) {
         foreach ($f in @([IO.Directory]::GetFiles($d, '*.zip'))) {
+            if (-not (Test-UaUaArchiveName ([IO.Path]::GetFileName($f)))) { continue }
             $info = Get-UaArchiveInfo ([IO.Path]::GetFileName($f))
-            if ($info.Part -ne $Job.Part -or $info.Type -ne 'full') { continue }
+            if ($info.Part -ne $Job.Part -or $info.Type -notin 'full', 'other') { continue }
             if ($Job.Size -gt 0 -and (New-Object IO.FileInfo($f)).Length -ne $Job.Size) { continue }
             if (Test-UaZipOpens $f) { Write-UaLog ('Using archive found locally: ' + $f); return $f }
         }
@@ -2510,8 +2586,9 @@ function Wait-UaManualDownload($Job, [datetime]$Since) {
                     continue
                 }
                 if ($ext -ne '.zip') { continue }
+                if (-not (Test-UaUaArchiveName $fi.Name)) { continue }
                 $info = Get-UaArchiveInfo $fi.Name
-                if ($info.Part -ne $Job.Part -or $info.Type -eq 'text' -or $info.Type -eq 'textures') { continue }
+                if ($info.Part -ne $Job.Part -or $info.Type -in 'text', 'textures', 'linux') { continue }
                 $k = $fi.FullName
                 if ($sizes.ContainsKey($k) -and $sizes[$k] -eq $fi.Length -and $fi.Length -gt 1MB) {
                     if (Test-UaZipOpens $k) { return $k }

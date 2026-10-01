@@ -255,7 +255,11 @@ Test-Case 'Archive name classification' {
         @('Half-Life 2 Епізод Два (озвучення).zip', 'ep2', 'full'),
         @('Half-Life 2 Епізод Перший (озвучення+текст).zip', 'ep1', 'full'),
         @('Half-Life 2 Епізод другий (текст).zip', 'ep2', 'text'),
-        @('Half-Life 2 Deathmatch Ukr.zip', 'hl2dm', 'other')
+        @('Half-Life 2 Deathmatch Ukr.zip', 'hl2dm', 'other'),
+        @('Half-Life 2 + Episode 1 + Episode 2 UKR (voice+text).zip', 'hl2', 'full'),
+        @('Half-Life 2 + Episode 1 + Episode 2 UKR (текст).zip', 'hl2', 'text'),
+        @('Half-Life 2 + Episode 1 UKR (озвучення+текст).zip', 'hl2', 'full'),
+        @('Half-Life 2 UKR - Linux-SteamDeck (текст).tar.gz', 'hl2', 'linux')
     )
     foreach ($c in $cases) {
         $i = Get-UaArchiveInfo $c[0]
@@ -280,16 +284,35 @@ Test-Case 'Archive selection from listing' {
     Assert-Eq $sel['ep2'].Full.Id 'x2x2x2x2x2x2' 'unmarked zip used as fallback'
 }
 
-Test-Case 'Zip root detection and entry filters' {
-    Assert-Eq (Find-UaZipRootPrefix @('hl2_ukr/sound/a.wav')) '' 'flat archive'
-    Assert-Eq (Find-UaZipRootPrefix @('Half-Life 2 UKR/readme.txt', 'Half-Life 2 UKR/hl2_ukr/sound/a.wav')) 'Half-Life 2 UKR/' 'wrapper folder'
-    Assert-Eq (Find-UaZipRootPrefix @('A/B/hl2/resource/x.txt')) 'A/B/' 'nested wrapper'
-    Assert-Eq (Find-UaZipRootPrefix @('HL2/hl2_ukr/x.wav', 'HL2/platform/y.txt')) 'HL2/' 'wrapper named like a game folder'
-    Assert-Eq (Find-UaZipRootPrefix @('hl2/bin/client.dll', 'hl2/resource/a.txt')) '' 'hl2/bin is not a wrapper'
-    Assert-True ($null -eq (Find-UaZipRootPrefix @('readme.txt', 'sound/x.wav'))) 'unknown layout'
+Test-Case 'Selection ignores Google Docs and tar.gz; combined archive maps to hl2' {
+    $listing = @(
+        @{ Id = 'v1'; Name = 'Half-Life 2 + Episode 1 + Episode 2 UKR (voice+text).zip'; Path = 'Half-Life 2 + Episode 1 + Episode 2 UKR (voice+text).zip'; IsFolder = $false },
+        @{ Id = 't1'; Name = 'Half-Life 2 + Episode 1 + Episode 2 UKR (текст).zip'; Path = 'Half-Life 2 + Episode 1 + Episode 2 UKR (текст).zip'; IsFolder = $false },
+        @{ Id = 'g1'; Name = 'Як встановити локалізацію?'; Path = 'Як встановити локалізацію?'; IsFolder = $false },
+        @{ Id = 'l1'; Name = 'Half-Life 2 UKR - Linux-SteamDeck (текст).tar.gz'; Path = 'Half-Life 2 UKR - Linux-SteamDeck (текст).tar.gz'; IsFolder = $false }
+    )
+    $sel = Select-UaArchives -Listing $listing -Parts @('hl2', 'ep1', 'ep2')
+    Assert-Eq $sel['hl2'].Full.Id 'v1' 'combined voice+text archive -> hl2.Full'
+    Assert-Eq $sel['hl2'].Text.Id 't1' 'combined text archive -> hl2.Text'
+    Assert-True ($null -eq $sel['hl2'].Other) 'google doc is not treated as an archive'
+    Assert-True ($null -eq $sel['ep2'].Full) 'episode 2 not mis-detected from the combined name'
+    Assert-True ($null -eq $sel['ep1'].Full) 'episode 1 not mis-detected from the combined name'
+}
+
+Test-Case 'Install prefix detection and entry filters' {
+    function Pfx($names) { $r = Find-UaInstallPrefix $names; if (-not $r.Mapped) { return $null }; return $r.Prefix }
+    Assert-Eq (Pfx @('hl2_ukr/sound/a.wav')) '' 'flat archive (game folder at root)'
+    Assert-Eq (Pfx @('Half-Life 2 UKR/readme.txt', 'Half-Life 2 UKR/hl2_ukr/sound/a.wav')) 'Half-Life 2 UKR/' 'single wrapper folder'
+    Assert-Eq (Pfx @('A/B/hl2/resource/x.txt')) 'A/B/' 'nested wrapper'
+    Assert-Eq (Pfx @('hl2/resource/a.txt', 'episodic/x.txt', '__MACOSX/junk/y')) '' 'game folders at root, __MACOSX ignored'
+    Assert-Eq (Pfx @('hl2/bin/client.dll', 'hl2/resource/a.txt')) '' 'hl2 at root'
+    Assert-Eq (Pfx @('Half-Life 2 UKR/hl2/resource/x', 'Half-Life 2 UKR/episodic/y')) 'Half-Life 2 UKR/' 'wrapper with episodes'
+    Assert-Eq (Pfx @('sound/x.wav', 'resource/y.txt', 'readme.txt')) '' 'content dirs at root map to game root'
+    Assert-True ($null -eq (Pfx @('Audio/track1.mp3', 'Readme.txt', 'Cover.png'))) 'truly unknown layout stays unmapped'
     Assert-True (Test-UaSafeRelPath 'hl2/resource/a.txt') 'safe path'
     foreach ($bad in @('../x', 'a/../b', '/abs', 'C:/x', 'a//b')) { Assert-True (-not (Test-UaSafeRelPath $bad)) ('unsafe: ' + $bad) }
-    Assert-True (Test-UaJunkEntry 'readme.txt') 'root-level file skipped'
+    Assert-True (Test-UaJunkEntry 'readme.txt') 'root-level doc file skipped'
+    Assert-True (-not (Test-UaJunkEntry 'hl2/resource/readme.txt')) 'doc file inside a folder is kept'
     Assert-True (Test-UaJunkEntry 'hl2/__MACOSX/x') 'macos junk'
     Assert-True (Test-UaJunkEntry 'hl2/._x.wav') 'appledouble'
     Assert-True (-not (Test-UaJunkEntry 'hl2/resource/x.txt')) 'regular entry kept'
